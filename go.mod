@@ -1,12 +1,15 @@
-module github.com/gin-contrib/cache
+module github.com/freehere107/cache
 
 go 1.13
 
 require (
 	github.com/bradfitz/gomemcache v0.0.0-20190329173943-551aad21a668
+	github.com/gin-contrib/cache v1.1.0
 	github.com/gin-gonic/gin v1.6.3
+	github.com/go-kratos/kratos v0.5.0
 	github.com/gomodule/redigo v2.0.0+incompatible
 	github.com/memcachier/mc v2.0.1+incompatible
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/robfig/go-cache v0.0.0-20130306151617-9fc39e0dbf62
 	github.com/stretchr/testify v1.4.0
 )
