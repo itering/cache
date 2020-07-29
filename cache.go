@@ -169,8 +169,12 @@ func CachePage(store persistence.CacheStore, expire time.Duration, handle bm.Han
 
 		key := CreateKey(c.Request.URL.RequestURI())
 		if c.Request.Method == "POST" {
-			b, _ := ioutil.ReadAll(c.Request.Body)
-			key = CreateKey(c.Request.URL.RequestURI(), string(b))
+			var bodyBytes []byte
+			if c.Request.Body != nil {
+				bodyBytes, _ = ioutil.ReadAll(c.Request.Body)
+				c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+			}
+			key = CreateKey(c.Request.URL.RequestURI(), string(bodyBytes))
 		}
 		if err := store.Get(key, &cache); err != nil {
 			if err != persistence.ErrCacheMiss {
