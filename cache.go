@@ -5,9 +5,11 @@ import (
 	"crypto/sha1"
 	"encoding/gob"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,8 +51,8 @@ type cachedWriter struct {
 // var _ bm.ResponseWriter = &cachedWriter{}
 
 // CreateKey creates a package specific key for a given string
-func CreateKey(u string) string {
-	return urlEscape(PageCachePrefix, u)
+func CreateKey(u string, ext ...string) string {
+	return urlEscape(PageCachePrefix, u+strings.Join(ext, ""))
 }
 
 func urlEscape(prefix string, u string) string {
@@ -164,7 +166,12 @@ func SiteCache(store persistence.CacheStore, expire time.Duration) bm.HandlerFun
 func CachePage(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
 	return func(c *bm.Context) {
 		var cache responseCache
+
 		key := CreateKey(c.Request.URL.RequestURI())
+		if c.Request.Method == "POST" {
+			b, _ := ioutil.ReadAll(c.Request.Body)
+			key = CreateKey(c.Request.URL.RequestURI(), string(b))
+		}
 		if err := store.Get(key, &cache); err != nil {
 			if err != persistence.ErrCacheMiss {
 				log.Println(err.Error())
