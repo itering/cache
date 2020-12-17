@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/freehere107/cache/utils"
-	"github.com/gomodule/redigo/redis"
+	"github.com/garyburd/redigo/redis"
 )
 
 // RedisStore represents the cache with redis persistence
