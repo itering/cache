@@ -13,13 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/freehere107/cache/persistence"
+	"github.com/gin-contrib/cache/persistence"
 	bm "github.com/go-kratos/kratos/pkg/net/http/blademaster"
 )
 
 const (
-	CACHE_MIDDLEWARE_KEY = "bm.contrib.cache"
-
 	noWritten = -1
 )
 
@@ -137,12 +135,6 @@ func (w *cachedWriter) Written() bool {
 }
 
 // Cache Middleware
-func Cache(store *persistence.CacheStore) bm.HandlerFunc {
-	return func(c *bm.Context) {
-		c.Set(CACHE_MIDDLEWARE_KEY, store)
-		c.Next()
-	}
-}
 
 func SiteCache(store persistence.CacheStore, expire time.Duration) bm.HandlerFunc {
 	return func(c *bm.Context) {
@@ -162,8 +154,8 @@ func SiteCache(store persistence.CacheStore, expire time.Duration) bm.HandlerFun
 	}
 }
 
-// CachePage Decorator
-func CachePage(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
+// cachePage Decorator
+func cachePage(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
 	return func(c *bm.Context) {
 		var cache responseCache
 
@@ -229,34 +221,10 @@ func CachePageWithoutQuery(store persistence.CacheStore, expire time.Duration, h
 // CachePageAtomic Decorator
 func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
 	var m sync.Mutex
-	p := CachePage(store, expire, handle)
+	p := cachePage(store, expire, handle)
 	return func(c *bm.Context) {
 		m.Lock()
 		defer m.Unlock()
 		p(c)
-	}
-}
-
-func CachePageWithoutHeader(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
-	return func(c *bm.Context) {
-		var cache responseCache
-		key := CreateKey(c.Request.URL.RequestURI())
-		if err := store.Get(key, &cache); err != nil {
-			if err != persistence.ErrCacheMiss {
-				log.Println(err.Error())
-			}
-			// replace writer
-			writer := newCachedWriter(store, expire, c.Writer, key)
-			c.Writer = writer
-			handle(c)
-
-			// Drop caches of aborted contexts
-			if c.IsAborted() {
-				store.Delete(key)
-			}
-		} else {
-			c.Writer.WriteHeader(cache.Status)
-			c.Writer.Write(cache.Data)
-		}
 	}
 }
