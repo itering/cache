@@ -16,7 +16,7 @@ type RedisStore struct {
 
 // NewRedisCache returns a RedisStore
 // until redigo supports sharding/clustering, only one host will be in hostList
-func NewRedisCache(host string, password string, defaultExpiration time.Duration) *RedisStore {
+func NewRedisCache(host string, password string, defaultExpiration time.Duration, prefix string) *RedisStore {
 	var pool = &redis.Pool{
 		MaxIdle:     5,
 		IdleTimeout: 240 * time.Second,
@@ -48,7 +48,7 @@ func NewRedisCache(host string, password string, defaultExpiration time.Duration
 			return nil
 		},
 	}
-	return &RedisStore{pool, defaultExpiration, "ff"}
+	return &RedisStore{pool, defaultExpiration, prefix}
 }
 
 // NewRedisCacheWithPool returns a RedisStore using the provided pool
