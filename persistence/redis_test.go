@@ -20,7 +20,7 @@ var newRedisStore = func(t *testing.T, defaultExpiration time.Duration) CacheSto
 	}
 	t.Errorf("couldn't connect to redis on %s", redisTestServer)
 	t.FailNow()
-	panic("")
+	return nil
 }
 
 func TestRedisCache_TypicalGetSet(t *testing.T) {

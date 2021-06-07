@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"fmt"
 	"github.com/gin-contrib/cache/utils"
 	"github.com/gomodule/redigo/redis"
 	"time"
@@ -10,6 +11,7 @@ import (
 type RedisStore struct {
 	pool              *redis.Pool
 	defaultExpiration time.Duration
+	prefix            string
 }
 
 // NewRedisCache returns a RedisStore
@@ -46,40 +48,40 @@ func NewRedisCache(host string, password string, defaultExpiration time.Duration
 			return nil
 		},
 	}
-	return &RedisStore{pool, defaultExpiration}
+	return &RedisStore{pool, defaultExpiration, "ff"}
 }
 
 // NewRedisCacheWithPool returns a RedisStore using the provided pool
 // until redigo supports sharding/clustering, only one host will be in hostList
-func NewRedisCacheWithPool(pool *redis.Pool, defaultExpiration time.Duration) *RedisStore {
-	return &RedisStore{pool, defaultExpiration}
+func NewRedisCacheWithPool(pool *redis.Pool, defaultExpiration time.Duration, prefix string) *RedisStore {
+	return &RedisStore{pool, defaultExpiration, prefix}
 }
 
 // Set (see CacheStore interface)
 func (c *RedisStore) Set(key string, value interface{}, expires time.Duration) error {
 	conn := c.pool.Get()
 	defer conn.Close()
-	return c.invoke(conn.Do, key, value, expires)
+	return c.invoke(conn.Do, c.KeyWithPrefix(key), value, expires)
 }
 
 // Add (see CacheStore interface)
 func (c *RedisStore) Add(key string, value interface{}, expires time.Duration) error {
 	conn := c.pool.Get()
 	defer conn.Close()
-	if exists(conn, key) {
+	if exists(conn, c.KeyWithPrefix(key)) {
 		return ErrNotStored
 	}
-	return c.invoke(conn.Do, key, value, expires)
+	return c.invoke(conn.Do, c.KeyWithPrefix(key), value, expires)
 }
 
 // Replace (see CacheStore interface)
 func (c *RedisStore) Replace(key string, value interface{}, expires time.Duration) error {
 	conn := c.pool.Get()
 	defer conn.Close()
-	if !exists(conn, key) {
+	if !exists(conn, c.KeyWithPrefix(key)) {
 		return ErrNotStored
 	}
-	err := c.invoke(conn.Do, key, value, expires)
+	err := c.invoke(conn.Do, c.KeyWithPrefix(key), value, expires)
 	if value == nil {
 		return ErrNotStored
 	}
@@ -92,7 +94,7 @@ func (c *RedisStore) Replace(key string, value interface{}, expires time.Duratio
 func (c *RedisStore) Get(key string, ptrValue interface{}) error {
 	conn := c.pool.Get()
 	defer conn.Close()
-	raw, err := conn.Do("GET", key)
+	raw, err := conn.Do("GET", c.KeyWithPrefix(key))
 	if raw == nil {
 		return ErrCacheMiss
 	}
@@ -112,10 +114,10 @@ func exists(conn redis.Conn, key string) bool {
 func (c *RedisStore) Delete(key string) error {
 	conn := c.pool.Get()
 	defer conn.Close()
-	if !exists(conn, key) {
+	if !exists(conn, c.KeyWithPrefix(key)) {
 		return ErrCacheMiss
 	}
-	_, err := conn.Do("DEL", key)
+	_, err := conn.Do("DEL", c.KeyWithPrefix(key))
 	return err
 }
 
@@ -127,7 +129,7 @@ func (c *RedisStore) Increment(key string, delta uint64) (uint64, error) {
 	// redis will auto create the key, and we don't want that. Since we need to do increment
 	// ourselves instead of natively via INCRBY (redis doesn't support wrapping), we get the value
 	// and do the exists check this way to minimize calls to Redis
-	val, err := conn.Do("GET", key)
+	val, err := conn.Do("GET", c.KeyWithPrefix(key))
 	if val == nil {
 		return 0, ErrCacheMiss
 	}
@@ -137,7 +139,7 @@ func (c *RedisStore) Increment(key string, delta uint64) (uint64, error) {
 			return 0, err
 		}
 		sum := currentVal + int64(delta)
-		_, err = conn.Do("SET", key, sum)
+		_, err = conn.Do("SET", c.KeyWithPrefix(key), sum)
 		if err != nil {
 			return 0, err
 		}
@@ -153,18 +155,18 @@ func (c *RedisStore) Decrement(key string, delta uint64) (newValue uint64, err e
 	defer conn.Close()
 	// Check for existance *before* increment as per the cache contract.
 	// redis will auto create the key, and we don't want that, hence the exists call
-	if !exists(conn, key) {
+	if !exists(conn, c.KeyWithPrefix(key)) {
 		return 0, ErrCacheMiss
 	}
 	// Decrement contract says you can only go to 0
 	// so we go fetch the value and if the delta is greater than the amount,
 	// 0 out the value
-	currentVal, err := redis.Int64(conn.Do("GET", key))
+	currentVal, err := redis.Int64(conn.Do("GET", c.KeyWithPrefix(key)))
 	if err == nil && delta > uint64(currentVal) {
-		tempint, err := redis.Int64(conn.Do("DECRBY", key, currentVal))
+		tempint, err := redis.Int64(conn.Do("DECRBY", c.KeyWithPrefix(key), currentVal))
 		return uint64(tempint), err
 	}
-	tempint, err := redis.Int64(conn.Do("DECRBY", key, delta))
+	tempint, err := redis.Int64(conn.Do("DECRBY", c.KeyWithPrefix(key), delta))
 	return uint64(tempint), err
 }
 
@@ -199,4 +201,11 @@ func (c *RedisStore) invoke(f func(string, ...interface{}) (interface{}, error),
 	_, err = f("SET", key, b)
 	return err
 
+}
+
+func (c *RedisStore) KeyWithPrefix(key string) string {
+	if c.prefix != "" {
+		return fmt.Sprintf("%s:%s", c.prefix, key)
+	}
+	return key
 }
