@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cache/persistence"
-	bm "github.com/go-kratos/kratos/pkg/net/http/blademaster"
+	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	PageCachePrefix = "bm.contrib.page.cache"
+	PageCachePrefix = "gin.contrib.page.cache"
 )
 
 type responseCache struct {
@@ -37,7 +37,7 @@ func RegisterResponseCacheGob() {
 }
 
 type cachedWriter struct {
-	http.ResponseWriter
+	gin.ResponseWriter
 	status  int
 	written bool
 	store   persistence.CacheStore
@@ -46,7 +46,7 @@ type cachedWriter struct {
 	size    int
 }
 
-// var _ bm.ResponseWriter = &cachedWriter{}
+// var _ gin.ResponseWriter = &cachedWriter{}
 
 // CreateKey creates a package specific key for a given string
 func CreateKey(u string, ext ...string) string {
@@ -67,7 +67,7 @@ func urlEscape(prefix string, u string) string {
 	return buffer.String()
 }
 
-func newCachedWriter(store persistence.CacheStore, expire time.Duration, writer http.ResponseWriter, key string) *cachedWriter {
+func newCachedWriter(store persistence.CacheStore, expire time.Duration, writer gin.ResponseWriter, key string) *cachedWriter {
 	return &cachedWriter{ResponseWriter: writer, status: 0, written: false, store: store, expire: expire, key: key}
 }
 
@@ -136,8 +136,8 @@ func (w *cachedWriter) Written() bool {
 
 // Cache Middleware
 
-func SiteCache(store persistence.CacheStore, expire time.Duration) bm.HandlerFunc {
-	return func(c *bm.Context) {
+func SiteCache(store persistence.CacheStore, expire time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var cache responseCache
 		key := CreateKey(c.Request.URL.RequestURI())
 		if err := store.Get(key, &cache); err != nil {
@@ -155,8 +155,8 @@ func SiteCache(store persistence.CacheStore, expire time.Duration) bm.HandlerFun
 }
 
 // cachePage Decorator
-func cachePage(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
-	return func(c *bm.Context) {
+func cachePage(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var cache responseCache
 
 		key := CreateKey(c.Request.URL.RequestURI())
@@ -194,8 +194,8 @@ func cachePage(store persistence.CacheStore, expire time.Duration, handle bm.Han
 }
 
 // CachePageWithoutQuery add ability to ignore GET query parameters.
-func CachePageWithoutQuery(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
-	return func(c *bm.Context) {
+func CachePageWithoutQuery(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var cache responseCache
 		key := CreateKey(c.Request.URL.Path)
 		if err := store.Get(key, &cache); err != nil {
@@ -219,10 +219,10 @@ func CachePageWithoutQuery(store persistence.CacheStore, expire time.Duration, h
 }
 
 // CachePageAtomic Decorator
-func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle bm.HandlerFunc) bm.HandlerFunc {
+func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
 	var m sync.Mutex
 	p := cachePage(store, expire, handle)
-	return func(c *bm.Context) {
+	return func(c *gin.Context) {
 		m.Lock()
 		defer m.Unlock()
 		p(c)
