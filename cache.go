@@ -99,7 +99,7 @@ func (w *cachedWriter) Write(data []byte) (int, error) {
 			}
 		}
 	}
-	return ret, err
+	return ret, nil
 }
 
 func (w *cachedWriter) WriteString(data string) (n int, err error) {

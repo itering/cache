@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"fmt"
 	"github.com/gin-contrib/cache/utils"
 	"github.com/gomodule/redigo/redis"
@@ -12,6 +13,7 @@ type RedisStore struct {
 	pool              *redis.Pool
 	defaultExpiration time.Duration
 	prefix            string
+	ctx               context.Context
 }
 
 // NewRedisCache returns a RedisStore
@@ -22,7 +24,7 @@ func NewRedisCache(host string, password string, defaultExpiration time.Duration
 		IdleTimeout: 240 * time.Second,
 		Dial: func() (redis.Conn, error) {
 			// the redis protocol should probably be made sett-able
-			c, err := redis.Dial("tcp", host)
+			c, err := redis.Dial("tcp", host, redis.DialReadTimeout(time.Millisecond*60), redis.DialConnectTimeout(time.Millisecond*60), redis.DialWriteTimeout(time.Millisecond*60))
 			if err != nil {
 				return nil, err
 			}
@@ -48,18 +50,21 @@ func NewRedisCache(host string, password string, defaultExpiration time.Duration
 			return nil
 		},
 	}
-	return &RedisStore{pool, defaultExpiration, prefix}
+	return &RedisStore{pool, defaultExpiration, prefix, context.TODO()}
 }
 
 // NewRedisCacheWithPool returns a RedisStore using the provided pool
 // until redigo supports sharding/clustering, only one host will be in hostList
 func NewRedisCacheWithPool(pool *redis.Pool, defaultExpiration time.Duration, prefix string) *RedisStore {
-	return &RedisStore{pool, defaultExpiration, prefix}
+	return &RedisStore{pool, defaultExpiration, prefix, context.TODO()}
 }
 
 // Set (see CacheStore interface)
 func (c *RedisStore) Set(key string, value interface{}, expires time.Duration) error {
-	conn := c.pool.Get()
+	conn, err := c.pool.GetContext(c.ctx)
+	if err != nil {
+		return err
+	}
 	defer conn.Close()
 	return c.invoke(conn.Do, c.KeyWithPrefix(key), value, expires)
 }
@@ -92,7 +97,10 @@ func (c *RedisStore) Replace(key string, value interface{}, expires time.Duratio
 
 // Get (see CacheStore interface)
 func (c *RedisStore) Get(key string, ptrValue interface{}) error {
-	conn := c.pool.Get()
+	conn, err := c.pool.GetContext(c.ctx)
+	if err != nil {
+		return err
+	}
 	defer conn.Close()
 	raw, err := conn.Do("GET", c.KeyWithPrefix(key))
 	if raw == nil {
@@ -112,12 +120,15 @@ func exists(conn redis.Conn, key string) bool {
 
 // Delete (see CacheStore interface)
 func (c *RedisStore) Delete(key string) error {
-	conn := c.pool.Get()
+	conn, err := c.pool.GetContext(c.ctx)
+	if err != nil {
+		return err
+	}
 	defer conn.Close()
 	if !exists(conn, c.KeyWithPrefix(key)) {
 		return ErrCacheMiss
 	}
-	_, err := conn.Do("DEL", c.KeyWithPrefix(key))
+	_, err = conn.Do("DEL", c.KeyWithPrefix(key))
 	return err
 }
 
