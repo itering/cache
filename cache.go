@@ -199,7 +199,8 @@ func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle 
 	var m sync.Mutex
 	p := cachePage(store, expire, handle)
 	return func(c *gin.Context) {
-		span, _ := tracer.StartSpanFromContext(c.Request.Context(), "cache.CachePageAtomic")
+		span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "cache.CachePageAtomic")
+		c.Request = c.Request.WithContext(ctx)
 		defer func() {
 			span.Finish()
 		}()
