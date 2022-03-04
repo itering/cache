@@ -15,7 +15,6 @@ import (
 
 	"github.com/gin-contrib/cache/persistence"
 	"github.com/gin-gonic/gin"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 const (
@@ -194,16 +193,36 @@ func cachePage(store persistence.CacheStore, expire time.Duration, handle gin.Ha
 	}
 }
 
+// CachePageWithoutQuery add ability to ignore GET query parameters.
+func CachePageWithoutQuery(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var cache responseCache
+		key := CreateKey(c.Request.URL.Path)
+		if err := store.Get(key, &cache); err != nil {
+			if err != persistence.ErrCacheMiss {
+				log.Println(err.Error())
+			}
+			// replace writer
+			writer := newCachedWriter(store, expire, c.Writer, key)
+			c.Writer = writer
+			handle(c)
+		} else {
+			c.Writer.WriteHeader(cache.Status)
+			for k, vals := range cache.Header {
+				for _, v := range vals {
+					c.Writer.Header().Set(k, v)
+				}
+			}
+			_, _ = c.Writer.Write(cache.Data)
+		}
+	}
+}
+
 // CachePageAtomic Decorator
 func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
 	var m sync.Mutex
 	p := cachePage(store, expire, handle)
 	return func(c *gin.Context) {
-		span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "cache.CachePageAtomic")
-		c.Request = c.Request.WithContext(ctx)
-		defer func() {
-			span.Finish()
-		}()
 		m.Lock()
 		defer m.Unlock()
 		p(c)

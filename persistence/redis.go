@@ -3,9 +3,10 @@ package persistence
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/gin-contrib/cache/utils"
 	"github.com/gomodule/redigo/redis"
-	"time"
 )
 
 // RedisStore represents the cache with redis persistence
@@ -24,7 +25,7 @@ func NewRedisCache(host string, password string, defaultExpiration time.Duration
 		IdleTimeout: 240 * time.Second,
 		Dial: func() (redis.Conn, error) {
 			// the redis protocol should probably be made sett-able
-			c, err := redis.Dial("tcp", host, redis.DialReadTimeout(time.Millisecond*60), redis.DialConnectTimeout(time.Millisecond*60), redis.DialWriteTimeout(time.Millisecond*60))
+			c, err := redis.Dial("tcp", host, redis.DialReadTimeout(time.Millisecond*300), redis.DialConnectTimeout(time.Millisecond*200), redis.DialWriteTimeout(time.Millisecond*300))
 			if err != nil {
 				return nil, err
 			}
