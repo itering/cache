@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/gob"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gin-contrib/cache/persistence"
 	"github.com/gin-gonic/gin"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 const (
@@ -44,6 +46,7 @@ type cachedWriter struct {
 	expire  time.Duration
 	key     string
 	size    int
+	ctx     context.Context
 }
 
 // var _ gin.ResponseWriter = &cachedWriter{}
@@ -67,8 +70,8 @@ func urlEscape(prefix string, u string) string {
 	return buffer.String()
 }
 
-func newCachedWriter(store persistence.CacheStore, expire time.Duration, writer gin.ResponseWriter, key string) *cachedWriter {
-	return &cachedWriter{ResponseWriter: writer, status: 0, written: false, store: store, expire: expire, key: key}
+func newCachedWriter(ctx context.Context, store persistence.CacheStore, expire time.Duration, writer gin.ResponseWriter, key string) *cachedWriter {
+	return &cachedWriter{ctx: ctx, ResponseWriter: writer, status: 0, written: false, store: store, expire: expire, key: key}
 }
 
 func (w *cachedWriter) WriteHeader(code int) {
@@ -93,7 +96,7 @@ func (w *cachedWriter) Write(data []byte) (int, error) {
 				w.Header(),
 				data,
 			}
-			err = store.Set(w.key, val, w.expire)
+			err = store.Set(w.ctx, w.key, val, w.expire)
 			if err != nil {
 				// need logger
 			}
@@ -121,7 +124,7 @@ func (w *cachedWriter) WriteString(data string) (n int, err error) {
 			w.Header(),
 			[]byte(data),
 		}
-		store.Set(w.key, val, w.expire)
+		store.Set(w.ctx, w.key, val, w.expire)
 	}
 	return n, err
 }
@@ -132,26 +135,6 @@ func (w *cachedWriter) Status() int {
 
 func (w *cachedWriter) Written() bool {
 	return w.size != noWritten
-}
-
-// Cache Middleware
-
-func SiteCache(store persistence.CacheStore, expire time.Duration) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var cache responseCache
-		key := CreateKey(c.Request.URL.RequestURI())
-		if err := store.Get(key, &cache); err != nil {
-			c.Next()
-		} else {
-			c.Writer.WriteHeader(cache.Status)
-			for k, vals := range cache.Header {
-				for _, v := range vals {
-					c.Writer.Header().Set(k, v)
-				}
-			}
-			c.Writer.Write(cache.Data)
-		}
-	}
 }
 
 // cachePage Decorator
@@ -168,44 +151,18 @@ func cachePage(store persistence.CacheStore, expire time.Duration, handle gin.Ha
 			}
 			key = CreateKey(c.Request.URL.RequestURI(), string(bodyBytes))
 		}
-		if err := store.Get(key, &cache); err != nil {
+		if err := store.Get(c.Request.Context(), key, &cache); err != nil {
 			if err != persistence.ErrCacheMiss {
 				log.Println(err.Error())
 			}
 			// replace writer
-			writer := newCachedWriter(store, expire, c.Writer, key)
-			c.Writer = writer
+			c.Writer = newCachedWriter(c.Request.Context(), store, expire, c.Writer, key)
 			handle(c)
 
 			// Drop caches of aborted contexts
 			if c.IsAborted() {
-				store.Delete(key)
+				_ = store.Delete(c.Request.Context(), key)
 			}
-		} else {
-			c.Writer.WriteHeader(cache.Status)
-			for k, vals := range cache.Header {
-				for _, v := range vals {
-					c.Writer.Header().Set(k, v)
-				}
-			}
-			c.Writer.Write(cache.Data)
-		}
-	}
-}
-
-// CachePageWithoutQuery add ability to ignore GET query parameters.
-func CachePageWithoutQuery(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var cache responseCache
-		key := CreateKey(c.Request.URL.Path)
-		if err := store.Get(key, &cache); err != nil {
-			if err != persistence.ErrCacheMiss {
-				log.Println(err.Error())
-			}
-			// replace writer
-			writer := newCachedWriter(store, expire, c.Writer, key)
-			c.Writer = writer
-			handle(c)
 		} else {
 			c.Writer.WriteHeader(cache.Status)
 			for k, vals := range cache.Header {
@@ -223,6 +180,9 @@ func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle 
 	var m sync.Mutex
 	p := cachePage(store, expire, handle)
 	return func(c *gin.Context) {
+		span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "cache.CachePageAtomic")
+		c.Request = c.Request.WithContext(ctx)
+		defer span.Finish()
 		m.Lock()
 		defer m.Unlock()
 		p(c)
