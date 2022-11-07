@@ -3,188 +3,237 @@ package cache
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
 	"encoding/gob"
-	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-contrib/cache/persistence"
 	"github.com/gin-gonic/gin"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+	"golang.org/x/sync/singleflight"
 )
 
-const (
-	noWritten = -1
-)
+// Strategy the cache strategy
+type Strategy struct {
+	CacheKey string
 
-var (
-	PageCachePrefix = "gin.contrib.page.cache"
-)
+	// CacheStore if nil, use default cache store instead
+	CacheStore persistence.CacheStore
 
-type responseCache struct {
-	Status int
-	Header http.Header
-	Data   []byte
+	// CacheDuration
+	CacheDuration time.Duration
 }
 
-// RegisterResponseCacheGob registers the responseCache type with the encoding/gob package
-func RegisterResponseCacheGob() {
-	gob.Register(responseCache{})
+// GetCacheStrategyByRequest User can this function to design custom cache strategy by request.
+// The first return value bool means whether this request should be cached.
+// The second return value Strategy determine the special strategy by this request.
+type GetCacheStrategyByRequest func(c *gin.Context) (bool, Strategy)
+
+// Cache user must pass getCacheKey to describe the way to generate cache key
+func Cache(
+	defaultCacheStore persistence.CacheStore,
+	defaultExpire time.Duration,
+	opts ...Option,
+) gin.HandlerFunc {
+	cfg := newConfigByOpts(opts...)
+	return cache(defaultCacheStore, defaultExpire, cfg)
 }
 
-type cachedWriter struct {
-	gin.ResponseWriter
-	status  int
-	written bool
-	store   persistence.CacheStore
-	expire  time.Duration
-	key     string
-	size    int
-	ctx     context.Context
-}
-
-// var _ gin.ResponseWriter = &cachedWriter{}
-
-// CreateKey creates a package specific key for a given string
-func CreateKey(u string, ext ...string) string {
-	return urlEscape(PageCachePrefix, u+strings.Join(ext, ""))
-}
-
-func urlEscape(prefix string, u string) string {
-	key := url.QueryEscape(u)
-	if len(key) > 200 {
-		h := sha1.New()
-		_, _ = io.WriteString(h, u)
-		key = string(h.Sum(nil))
+func cache(
+	defaultCacheStore persistence.CacheStore,
+	defaultExpire time.Duration,
+	cfg *Config,
+) gin.HandlerFunc {
+	if cfg.getCacheStrategyByRequest == nil {
+		panic("cache strategy is nil")
 	}
-	var buffer bytes.Buffer
-	buffer.WriteString(prefix)
-	buffer.WriteString(":")
-	buffer.WriteString(key)
-	return buffer.String()
-}
 
-func newCachedWriter(ctx context.Context, store persistence.CacheStore, expire time.Duration, writer gin.ResponseWriter, key string) *cachedWriter {
-	return &cachedWriter{ctx: ctx, ResponseWriter: writer, status: 0, written: false, store: store, expire: expire, key: key}
-}
+	sfGroup := singleflight.Group{}
 
-func (w *cachedWriter) WriteHeader(code int) {
-	w.status = code
-	w.written = true
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *cachedWriter) Write(data []byte) (int, error) {
-	ret, err := w.ResponseWriter.Write(data)
-	if err == nil {
-		store := w.store
-		// var cache responseCache
-		// if err := store.Get(w.key, &cache); err == nil {
-		// 	data = append(cache.Data, data...)
-		// }
-
-		// cache responses with a status code < 300
-		if w.Status() < 300 {
-			val := responseCache{
-				w.Status(),
-				w.Header(),
-				data,
-			}
-			err = store.Set(w.ctx, w.key, val, w.expire)
-			if err != nil {
-				// need logger
-			}
-		}
-	}
-	return ret, nil
-}
-
-func (w *cachedWriter) WriteString(data string) (n int, err error) {
-	// ret, err := w.ResponseWriter.WriteString(data)
-
-	// w.WriteHeaderNow()
-	if !w.Written() {
-		w.size = 0
-		w.ResponseWriter.WriteHeader(w.status)
-	}
-	n, err = io.WriteString(w.ResponseWriter, data)
-	w.size += n
-
-	// cache responses with a status code < 300
-	if err == nil && w.Status() < 300 {
-		store := w.store
-		val := responseCache{
-			w.Status(),
-			w.Header(),
-			[]byte(data),
-		}
-		store.Set(w.ctx, w.key, val, w.expire)
-	}
-	return n, err
-}
-
-func (w *cachedWriter) Status() int {
-	return w.status
-}
-
-func (w *cachedWriter) Written() bool {
-	return w.size != noWritten
-}
-
-// cachePage Decorator
-func cachePage(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var cache responseCache
+		shouldCache, cacheStrategy := cfg.getCacheStrategyByRequest(c)
+		if !shouldCache {
+			c.Next()
+			return
+		}
 
-		key := CreateKey(c.Request.URL.RequestURI())
+		cacheKey := cacheStrategy.CacheKey
+
+		if cfg.prefixKey != "" {
+			cacheKey = cfg.prefixKey + cacheKey
+		}
+
+		// merge cfg
+		cacheStore := defaultCacheStore
+		if cacheStrategy.CacheStore != nil {
+			cacheStore = cacheStrategy.CacheStore
+		}
+
+		cacheDuration := defaultExpire
+		if cacheStrategy.CacheDuration > 0 {
+			cacheDuration = cacheStrategy.CacheDuration
+		}
+
+		// read cache first
+		{
+			respCache := &ResponseCache{}
+			err := cacheStore.Get(context.TODO(), cacheKey, &respCache)
+			if err == nil {
+				replyWithCache(c, cfg, respCache)
+				cfg.hitCacheCallback(c)
+				return
+			}
+
+			// if err != persistence.ErrCacheMiss {
+			// }
+		}
+
+		// cache miss, then call the backend
+
+		// use responseCacheWriter in order to record the response
+		cacheWriter := &responseCacheWriter{ResponseWriter: c.Writer}
+		c.Writer = cacheWriter
+
+		inFlight := false
+		rawRespCache, _, _ := sfGroup.Do(cacheKey, func() (interface{}, error) {
+			if cfg.singleFlightForgetTimeout > 0 {
+				forgetTimer := time.AfterFunc(cfg.singleFlightForgetTimeout, func() {
+					sfGroup.Forget(cacheKey)
+				})
+				defer forgetTimer.Stop()
+			}
+
+			c.Next()
+
+			inFlight = true
+
+			respCache := &ResponseCache{}
+			respCache.fillWithCacheWriter(cacheWriter)
+
+			// only cache 2xx response
+			if !c.IsAborted() && cacheWriter.Status() < 300 && cacheWriter.Status() >= 200 {
+				_ = cacheStore.Set(context.TODO(), cacheKey, respCache, cacheDuration)
+			}
+
+			return respCache, nil
+		})
+
+		if !inFlight {
+			replyWithCache(c, cfg, rawRespCache.(*ResponseCache))
+			cfg.shareSingleFlightCallback(c)
+		}
+	}
+}
+
+// CacheByRequestURI a shortcut function for caching response by uri
+func CacheByRequestURI(defaultCacheStore persistence.CacheStore, defaultExpire time.Duration, opts ...Option) gin.HandlerFunc {
+	cfg := newConfigByOpts(opts...)
+
+	cacheStrategy := func(c *gin.Context) (bool, Strategy) {
+
+		var suffix string
 		if c.Request.Method == "POST" {
 			var bodyBytes []byte
 			if c.Request.Body != nil {
 				bodyBytes, _ = ioutil.ReadAll(c.Request.Body)
 				c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 			}
-			key = CreateKey(c.Request.URL.RequestURI(), string(bodyBytes))
+			suffix = string(bodyBytes)
 		}
-		if err := store.Get(c.Request.Context(), key, &cache); err != nil {
-			if err != persistence.ErrCacheMiss {
-				log.Println(err.Error())
-			}
-			// replace writer
-			c.Writer = newCachedWriter(c.Request.Context(), store, expire, c.Writer, key)
-			handle(c)
+		newUri, err := getRequestUriIgnoreQueryOrder(c.Request.RequestURI + suffix)
+		if err != nil {
+			newUri = c.Request.RequestURI
+		}
 
-			// Drop caches of aborted contexts
-			if c.IsAborted() {
-				_ = store.Delete(c.Request.Context(), key)
-			}
-		} else {
-			c.Writer.WriteHeader(cache.Status)
-			for k, vals := range cache.Header {
-				for _, v := range vals {
-					c.Writer.Header().Set(k, v)
-				}
-			}
-			_, _ = c.Writer.Write(cache.Data)
-		}
+		return true, Strategy{CacheKey: newUri}
 	}
+
+	cfg.getCacheStrategyByRequest = cacheStrategy
+
+	return cache(defaultCacheStore, defaultExpire, cfg)
 }
 
-// CachePageAtomic Decorator
-func CachePageAtomic(store persistence.CacheStore, expire time.Duration, handle gin.HandlerFunc) gin.HandlerFunc {
-	var m sync.Mutex
-	p := cachePage(store, expire, handle)
-	return func(c *gin.Context) {
-		span, ctx := tracer.StartSpanFromContext(c.Request.Context(), "cache.CachePageAtomic")
-		c.Request = c.Request.WithContext(ctx)
-		defer span.Finish()
-		m.Lock()
-		defer m.Unlock()
-		p(c)
+func getRequestUriIgnoreQueryOrder(requestURI string) (string, error) {
+	parsedUrl, err := url.ParseRequestURI(requestURI)
+	if err != nil {
+		return "", err
 	}
+
+	values := parsedUrl.Query()
+
+	if len(values) == 0 {
+		return requestURI, nil
+	}
+
+	queryKeys := make([]string, 0, len(values))
+	for queryKey := range values {
+		queryKeys = append(queryKeys, queryKey)
+	}
+	sort.Strings(queryKeys)
+
+	queryVals := make([]string, 0, len(values))
+	for _, queryKey := range queryKeys {
+		sort.Strings(values[queryKey])
+		for _, val := range values[queryKey] {
+			queryVals = append(queryVals, queryKey+"="+val)
+		}
+	}
+	return parsedUrl.Path + "?" + strings.Join(queryVals, "&"), nil
+}
+
+func init() {
+	gob.Register(&ResponseCache{})
+}
+
+// ResponseCache record the http response cache
+type ResponseCache struct {
+	Status int
+	Header http.Header
+	Data   []byte
+}
+
+func (c *ResponseCache) fillWithCacheWriter(cacheWriter *responseCacheWriter) {
+	c.Status = cacheWriter.Status()
+	c.Data = cacheWriter.body.Bytes()
+	c.Header = cacheWriter.Header().Clone()
+}
+
+// responseCacheWriter
+type responseCacheWriter struct {
+	gin.ResponseWriter
+	body bytes.Buffer
+}
+
+func (w *responseCacheWriter) Write(b []byte) (int, error) {
+	w.body.Write(b)
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *responseCacheWriter) WriteString(s string) (int, error) {
+	w.body.WriteString(s)
+	return w.ResponseWriter.WriteString(s)
+}
+
+func replyWithCache(
+	c *gin.Context,
+	cfg *Config,
+	respCache *ResponseCache,
+) {
+	cfg.beforeReplyWithCacheCallback(c, respCache)
+
+	c.Writer.WriteHeader(respCache.Status)
+
+	for key, values := range respCache.Header {
+		for _, val := range values {
+			c.Writer.Header().Set(key, val)
+		}
+	}
+
+	if _, err := c.Writer.Write(respCache.Data); err != nil {
+		cfg.logger.Errorf("write response error: %s", err)
+	}
+	c.Abort()
 }

@@ -65,7 +65,7 @@ func expiration(t *testing.T, newCache cacheFactory) {
 	cache := newCache(t, time.Second)
 	// Test Set w/ DEFAULT
 	value := 10
-	cache.Set(ctx, "int", value, DEFAULT)
+	_ = cache.Set(ctx, "int", value, DEFAULT)
 	time.Sleep(2 * time.Second)
 	err = cache.Get(ctx, "int", &value)
 	if err != ErrCacheMiss {
@@ -73,7 +73,7 @@ func expiration(t *testing.T, newCache cacheFactory) {
 	}
 
 	// Test Set w/ short time
-	cache.Set(ctx, "int", value, time.Second)
+	_ = cache.Set(ctx, "int", value, time.Second)
 	time.Sleep(2 * time.Second)
 	err = cache.Get(ctx, "int", &value)
 	if err != ErrCacheMiss {
@@ -81,7 +81,7 @@ func expiration(t *testing.T, newCache cacheFactory) {
 	}
 
 	// Test Set w/ longer time.
-	cache.Set(ctx, "int", value, time.Hour)
+	_ = cache.Set(ctx, "int", value, time.Hour)
 	time.Sleep(2 * time.Second)
 	err = cache.Get(ctx, "int", &value)
 	if err != nil {
@@ -89,7 +89,7 @@ func expiration(t *testing.T, newCache cacheFactory) {
 	}
 
 	// Test Set w/ forever.
-	cache.Set(ctx, "int", value, FOREVER)
+	_ = cache.Set(ctx, "int", value, FOREVER)
 	time.Sleep(2 * time.Second)
 	err = cache.Get(ctx, "int", &value)
 	if err != nil {

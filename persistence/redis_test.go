@@ -15,8 +15,8 @@ const redisTestServer = "localhost:6379"
 var newRedisStore = func(t *testing.T, defaultExpiration time.Duration) CacheStore {
 	c, err := net.Dial("tcp", redisTestServer)
 	if err == nil {
-		c.Write([]byte("flush_all\r\n"))
-		c.Close()
+		_, _ = c.Write([]byte("flush_all\r\n"))
+		_ = c.Close()
 		var pool = &redis.Pool{MaxIdle: 5, IdleTimeout: 240 * time.Second, Dial: func() (redis.Conn, error) {
 			// the redis protocol should probably be made sett-able
 			c, err := redigotrace.Dial("tcp", redisTestServer)
