@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -138,14 +138,15 @@ func CacheByRequestURI(defaultCacheStore persistence.CacheStore, defaultExpire t
 		if c.Request.Method == "POST" {
 			var bodyBytes []byte
 			if c.Request.Body != nil {
-				bodyBytes, _ = ioutil.ReadAll(c.Request.Body)
-				c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+				bodyBytes, _ = io.ReadAll(c.Request.Body)
+				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			}
 			suffix = string(bodyBytes)
 		}
-		newUri, err := getRequestUriIgnoreQueryOrder(c.Request.RequestURI + suffix)
+		requestURI := c.Request.RequestURI + suffix
+		newUri, err := getRequestUriIgnoreQueryOrder(requestURI)
 		if err != nil {
-			newUri = c.Request.RequestURI
+			newUri = requestURI
 		}
 
 		return true, Strategy{CacheKey: newUri}
