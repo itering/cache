@@ -98,13 +98,16 @@ func cache(
 		c.Writer = cacheWriter
 
 		inFlight := false
-		rawRespCache, _, _ := sfGroup.Do(cacheKey, func() (interface{}, error) {
-			if cfg.singleFlightForgetTimeout > 0 {
-				forgetTimer := time.AfterFunc(cfg.singleFlightForgetTimeout, func() {
-					sfGroup.Forget(cacheKey)
-				})
-				defer forgetTimer.Stop()
-			}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second*40)
+		defer cancel()
+		rawRespCacheCh := sfGroup.DoChan(cacheKey, func() (interface{}, error) {
+			// if cfg.singleFlightForgetTimeout > 0 {
+			// 	forgetTimer := time.AfterFunc(cfg.singleFlightForgetTimeout, func() {
+			// 		sfGroup.Forget(cacheKey)
+			// 	})
+			// 	defer forgetTimer.Stop()
+			// }
 
 			c.Next()
 
@@ -117,13 +120,24 @@ func cache(
 			if !c.IsAborted() && cacheWriter.Status() < 300 && cacheWriter.Status() >= 200 {
 				_ = cacheStore.Set(context.TODO(), cacheKey, respCache, cacheDuration)
 			}
-
 			return respCache, nil
 		})
 
-		if !inFlight {
-			replyWithCache(c, cfg, rawRespCache.(*ResponseCache))
-			cfg.shareSingleFlightCallback(c)
+		select {
+		case <-ctx.Done():
+			sfGroup.Forget(cacheKey)
+			c.AbortWithStatus(500)
+			return
+		case ret := <-rawRespCacheCh:
+			if ret.Err != nil {
+				sfGroup.Forget(cacheKey)
+				c.AbortWithStatus(500)
+				return
+			}
+			if !inFlight {
+				replyWithCache(c, cfg, ret.Val.(*ResponseCache))
+				cfg.shareSingleFlightCallback(c)
+			}
 		}
 	}
 }
