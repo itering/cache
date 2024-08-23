@@ -20,6 +20,8 @@ type Config struct {
 	shareSingleFlightCallback OnShareSingleFlightCallback
 
 	prefixKey string
+
+	headers []string
 }
 
 func newConfigByOpts(opts ...Option) *Config {
@@ -45,6 +47,15 @@ func WithLogger(l Logger) Option {
 	return func(c *Config) {
 		if l != nil {
 			c.logger = l
+		}
+	}
+}
+
+// WithHeaders enable headers with cache key
+func WithHeaders(headers []string) Option {
+	return func(c *Config) {
+		if len(headers) > 0 {
+			c.headers = headers
 		}
 	}
 }

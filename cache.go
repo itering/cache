@@ -158,6 +158,17 @@ func CacheByRequestURI(defaultCacheStore persistence.CacheStore, defaultExpire t
 			suffix = string(bodyBytes)
 		}
 		requestURI := c.Request.RequestURI + suffix
+
+		for _, key := range cfg.headers {
+			if h, ok := c.Request.Header[key]; ok && len(h) > 0 {
+				if requestURI[len(requestURI)-1] == '?' {
+					requestURI += "&" + key + "=" + h[0]
+				} else {
+					requestURI += "?" + key + "=" + h[0]
+				}
+			}
+		}
+
 		newUri, err := getRequestUriIgnoreQueryOrder(requestURI)
 		if err != nil {
 			newUri = requestURI
