@@ -134,6 +134,9 @@ func cache(
 				c.AbortWithStatus(500)
 				return
 			}
+			if c.IsAborted() {
+				return
+			}
 			if !inFlight {
 				replyWithCache(c, cfg, ret.Val.(*ResponseCache))
 				cfg.shareSingleFlightCallback(c)
