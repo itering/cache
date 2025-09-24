@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -102,6 +103,17 @@ func cache(
 		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second*40)
 		defer cancel()
 		rawRespCacheCh := sfGroup.DoChan(cacheKey, func() (interface{}, error) {
+			defer func() {
+				if err := recover(); err != nil {
+					stack := string(debug.Stack())
+					cfg.logger.Errorf(
+						"recovered from panic inside singleflight.DoChan. URI: %s, Error: %v\nStack: %s",
+						c.Request.RequestURI,
+						err,
+						stack,
+					)
+				}
+			}()
 			// if cfg.singleFlightForgetTimeout > 0 {
 			// 	forgetTimer := time.AfterFunc(cfg.singleFlightForgetTimeout, func() {
 			// 		sfGroup.Forget(cacheKey)

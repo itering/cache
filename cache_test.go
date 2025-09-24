@@ -143,13 +143,13 @@ func TestWriteHeader(t *testing.T) {
 
 	_, engine := gin.CreateTestContext(testWriter)
 	engine.Use(cacheURIMiddleware)
-	engine.GET("/cache", func(c *gin.Context) {
+	engine.GET("/cache2", func(c *gin.Context) {
 		c.Writer.WriteHeader(http.StatusOK)
 		c.Writer.Header().Set("hello", "world")
 	})
 
 	{
-		testRequest := httptest.NewRequest(http.MethodGet, "/cache", nil)
+		testRequest := httptest.NewRequest(http.MethodGet, "/cache2", nil)
 		engine.ServeHTTP(testWriter, testRequest)
 		assert.Equal(t, "world", testWriter.Header().Get("hello"))
 	}
