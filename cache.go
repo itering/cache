@@ -141,7 +141,7 @@ func cache(
 			c.AbortWithStatus(500)
 			return
 		case ret := <-rawRespCacheCh:
-			if ret.Err != nil {
+			if ret.Err != nil || ret.Val == nil {
 				sfGroup.Forget(cacheKey)
 				c.AbortWithStatus(500)
 				return
