@@ -250,11 +250,17 @@ type responseCacheWriter struct {
 
 func (w *responseCacheWriter) Write(b []byte) (int, error) {
 	w.body.Write(b)
+	if w.ResponseWriter == nil {
+		return 0, http.ErrAbortHandler
+	}
 	return w.ResponseWriter.Write(b)
 }
 
 func (w *responseCacheWriter) WriteString(s string) (int, error) {
 	w.body.WriteString(s)
+	if w.ResponseWriter == nil {
+		return 0, http.ErrAbortHandler
+	}
 	return w.ResponseWriter.WriteString(s)
 }
 
